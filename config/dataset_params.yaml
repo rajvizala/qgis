@@ -1,0 +1,274 @@
+# =============================================================================
+# config/dataset_params.yaml
+# =============================================================================
+# Master configuration for the Geospatial Building Detection Chipping Pipeline.
+#
+# Design principles:
+#   1. ALL tunable parameters live here — never hard-code values in scripts.
+#   2. Commit this file with every experiment so results are reproducible.
+#   3. Override individual values via CLI args or env vars for ablation studies.
+#
+# Loaded by: scripts/generate_tiles.py → load_config()
+# =============================================================================
+
+
+# =============================================================================
+# TILE / CHIP GEOMETRY PARAMETERS
+# Controls the spatial dimensions and sampling strategy for each chip.
+# =============================================================================
+tile:
+
+  # Output chip dimensions in pixels.
+  # Standard choices:
+  #   256  — Fast training, good for dense urban with small buildings
+  #   512  — Better spatial context, recommended for suburban/rural
+  #   640  — Matches YOLOv8 default input resolution (no resize needed)
+  # NOTE: Larger tiles = more VRAM required per training batch.
+  size: 256
+
+  # Fractional overlap between adjacent chips.
+  # Use during training:  0.0  (no overlap, no duplicate annotations)
+  # Use during inference: 0.2–0.5  (sliding window, combined with NMS)
+  overlap: 0.0
+
+  # Ground sampling distance — meters per pixel in the satellite image.
+  # Typical values by zoom level (EPSG:3857):
+  #   Zoom 17 → ~1.2 m/px
+  #   Zoom 18 → ~0.6 m/px  ← recommended for building detection
+  #   Zoom 19 → ~0.3 m/px
+  # Check your actual GSD with: gdalinfo your_basemap.tif | grep "Pixel Size"
+  pixel_size_m: 0.6
+
+  # Image format for exported chips.
+  # PNG: lossless, preferred for training data integrity
+  # JPG: smaller files but lossy — may degrade mask quality
+  format: "PNG"
+
+  # PNG compression level (0 = no compression, 9 = maximum compression)
+  # Higher compression = smaller files but slower write speed.
+  # 3–6 is a good trade-off for large datasets.
+  png_compression: 4
+
+
+# =============================================================================
+# AREA OF INTEREST (AOI)
+# Bounding box defining the geographic region to chip.
+# Coordinates must match the CRS defined in dataset.crs below.
+# =============================================================================
+aoi:
+  # --- Example: Central London (EPSG:4326 lat/lon) ---
+  # After reprojection to EPSG:3857, these will be converted automatically.
+  xmin: -0.1500   # West longitude
+  ymin:  51.4900  # South latitude
+  xmax: -0.0700   # East longitude
+  ymax:  51.5300  # North latitude
+
+  # Human-readable name for this AOI (used in output directory naming)
+  name: "london_central"
+
+  # --- Alternative AOI examples (uncomment to use) ---
+
+  # New York City — Manhattan
+  # xmin: -74.0200
+  # ymin:  40.6980
+  # xmax: -73.9350
+  # ymax:  40.7870
+  # name: "nyc_manhattan"
+
+  # Nairobi, Kenya (strong OSM building coverage in informal settlements)
+  # xmin:  36.7200
+  # ymin:  -1.3500
+  # xmax:  36.8900
+  # ymax:  -1.2000
+  # name: "nairobi_central"
+
+  # Cairo, Egypt
+  # xmin:  31.1900
+  # ymin:  29.9400
+  # xmax:  31.3500
+  # ymax:  30.1100
+  # name: "cairo_urban"
+
+
+# =============================================================================
+# DATASET CONSTRUCTION PARAMETERS
+# Controls quality filtering and train/val/test split logic.
+# =============================================================================
+dataset:
+
+  # Coordinate Reference System for all spatial operations.
+  # EPSG:3857 (Web Mercator): matches XYZ tile servers, best for pixel math
+  # EPSG:4326 (WGS84 lat/lon): use only if your rasters are in geographic coords
+  # Local UTM: best for precise metric accuracy (e.g., EPSG:32630 for London)
+  crs: "EPSG:3857"
+
+  # Minimum fraction of pixels that must be positive (building) class for a
+  # chip to be included in the dataset. Chips below this threshold are discarded.
+  # Range: [0.0, 1.0]
+  # 0.000 = keep all chips (include all-background chips)
+  # 0.005 = discard chips where < 0.5% of pixels are buildings (recommended)
+  # 0.010 = stricter filtering for class-balanced training sets
+  min_positive_ratio: 0.005
+
+  # Target ratio of positive chips (containing buildings) to negative chips.
+  # Set to null to keep all chips that pass the min_positive_ratio filter.
+  # Set to e.g. 3 to sub-sample background chips to achieve a 1:3 pos:neg ratio.
+  # Recommended: null (let natural geographic distribution determine ratio)
+  positive_to_negative_ratio: null
+
+  # Train / Validation / Test split fractions. Must sum to 1.0.
+  # Splits are applied AFTER filtering and are spatially stratified
+  # by grid row to avoid spatial autocorrelation between splits.
+  splits:
+    train: 0.70
+    val:   0.15
+    test:  0.15
+
+  # Random seed for reproducible train/val/test splits.
+  # Change this to generate an alternative split for cross-validation.
+  random_seed: 42
+
+  # Whether to use spatial stratification for splits (recommended: true).
+  # Spatial stratification groups chips by geographic column block before
+  # splitting, preventing train/test data from adjacent tiles (which would
+  # leak spatial information and inflate validation metrics).
+  spatial_stratify: true
+
+
+# =============================================================================
+# CLASS DEFINITIONS
+# Defines the semantic classes present in the mask labels.
+# =============================================================================
+classes:
+  # Class index 0 — background
+  - id: 0
+    name: "background"
+    color_rgb: [0, 0, 0]        # Black in visualization
+    osm_tag: null               # Not an OSM feature
+
+  # Class index 1 — building
+  - id: 1
+    name: "building"
+    color_rgb: [255, 165, 0]    # Orange in visualization
+    osm_tag: "building=*"       # Matches any building type in OSM
+    burn_value: 255             # Pixel value in exported mask PNGs
+
+  # Uncomment to add more classes for multi-class segmentation:
+
+  # Class index 2 — road
+  # - id: 2
+  #   name: "road"
+  #   color_rgb: [128, 128, 128]
+  #   osm_tag: "highway=*"
+  #   burn_value: 128
+
+  # Class index 3 — vegetation / green space
+  # - id: 3
+  #   name: "vegetation"
+  #   color_rgb: [34, 139, 34]
+  #   osm_tag: "landuse=grass"
+  #   burn_value: 85
+
+  # Class index 4 — water
+  # - id: 4
+  #   name: "water"
+  #   color_rgb: [0, 0, 255]
+  #   osm_tag: "natural=water"
+  #   burn_value: 60
+
+
+# =============================================================================
+# RASTERIZATION PARAMETERS
+# Controls how vector polygons are burned into the raster mask grid.
+# =============================================================================
+rasterization:
+
+  # Output data type for the mask GeoTIFF.
+  # Byte (uint8):  Values 0–255. Sufficient for up to 255 classes.
+  # UInt16:        Values 0–65535. Required for >255 classes.
+  data_type: "Byte"
+
+  # Background value for pixels not covered by any vector feature.
+  nodata_value: 0
+
+  # Anti-aliasing for polygon edges.
+  # false = hard binary edges (recommended for semantic segmentation labels)
+  # true  = soft edges (useful for panoptic segmentation with boundary loss)
+  antialiasing: false
+
+  # Minimum polygon area to rasterize (in map units squared, e.g., m²).
+  # Filters out OSM micro-polygons that would appear as < 1px after rasterization.
+  # At 0.6 m/px resolution, a 2×2 px building = 1.44 m² minimum footprint.
+  min_polygon_area_m2: 4.0
+
+
+# =============================================================================
+# FILE PATHS
+# All paths relative to the repository root. Update for your local setup.
+# =============================================================================
+paths:
+
+  # Input: Satellite basemap GeoTIFF (exported from QGIS XYZ tile layer)
+  satellite_geotiff: "data/raw/basemap.tif"
+
+  # Input: OSM building footprints (fetched via QuickOSM)
+  osm_buildings: "data/raw/osm_buildings.geojson"
+
+  # Output: Root directory for generated chips
+  # Subdirectories 'images/' and 'masks/' will be created automatically.
+  output_dir: "data/chips"
+
+  # Output: Full-extent binary mask GeoTIFF (intermediate product)
+  # This file is produced by rasterization and used as the mask source for clipping.
+  full_mask_geotiff: "data/raw/building_mask_full.tif"
+
+  # Output: COCO annotation JSON (optional; produced by a separate script)
+  coco_annotations: "data/annotations/coco_annotations.json"
+
+  # Log file path for the pipeline run
+  log_file: "logs/chipping_pipeline.log"
+
+
+# =============================================================================
+# DATA AUGMENTATION PREVIEW PARAMETERS
+# These are NOT applied during chip generation — they are hints for the
+# downstream ML training script to configure its augmentation pipeline.
+# Document them here so the dataset and training config stay in sync.
+# =============================================================================
+augmentation_hints:
+
+  # Geometric augmentations (safe for satellite imagery — buildings are
+  # rotationally symmetric and the ground truth mask must be transformed
+  # identically to the image for label consistency)
+  horizontal_flip: true
+  vertical_flip: true
+  rotation_degrees: [90, 180, 270]   # Ortho imagery: 90° rotations are valid
+  random_crop_scale: [0.8, 1.0]
+
+  # Photometric augmentations (image only — do NOT apply to mask)
+  brightness_range: [0.8, 1.2]
+  contrast_range: [0.8, 1.2]
+  saturation_range: [0.9, 1.1]
+
+  # Avoid aggressive color jitter — satellite imagery has consistent
+  # radiometric properties and the model should generalize across
+  # different seasons/times without excessive color distortion.
+  hue_shift_degrees: 10
+
+  # Simulate sensor noise and atmospheric effects
+  gaussian_noise_std: 0.01
+  gaussian_blur_sigma: [0.0, 0.5]
+
+
+# =============================================================================
+# METADATA
+# Version-control the config itself for experiment tracking.
+# =============================================================================
+metadata:
+  version: "1.0.0"
+  created_by: "generate_tiles.py"
+  description: "Building detection dataset — urban core, high-resolution XYZ tiles"
+  source_imagery: "Google Satellite / ESRI World Imagery (Zoom 18)"
+  source_labels: "OpenStreetMap via QuickOSM (building=*)"
+  license_labels: "ODbL — OpenStreetMap Contributors"
+  last_updated: "2025-06-01"
